@@ -1,3 +1,3 @@
-idf_component_register(SRCS "main.cpp" "modules/fastfetch.cpp"
+idf_component_register(SRCS "main.cpp" "modules/fastfetch.cpp" "modules/mqtt_manager.cpp" "modules/vfs.cpp" "modules/config_manager.cpp"
         INCLUDE_DIRS "."
-        PRIV_REQUIRES esp_wifi lwip esp_event spi_flash nvs_flash esp_timer)
+        PRIV_REQUIRES esp_wifi lwip esp_event spi_flash nvs_flash esp_timer littlefs)

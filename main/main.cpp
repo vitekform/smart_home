@@ -12,11 +12,41 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 #include "modules/fastfetch.h"
+#include "modules/mqtt_manager.h"
+#include "modules/vfs.h"
+#include "modules/config_manager.h"
 
-// Configuration Target
-#define WIFI_SSID      "wifič-formánci"
-#define WIFI_PASS      "8!!mU%QW09wk*AT7c8G%"
-#define MAXIMUM_RETRY  5
+const char* x1root = "-----BEGIN CERTIFICATE-----\n"
+"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\n"
+"-----END CERTIFICATE-----\n";
 
 // FreeRTOS event group to signal when we are connected
 static EventGroupHandle_t s_wifi_event_group;
@@ -25,6 +55,7 @@ static EventGroupHandle_t s_wifi_event_group;
 
 static const char *TAG = "WiFi_CPP";
 static int s_retry_num = 0;
+static int s_max_retry = 5;
 
 // C-compatible event handler callback wrapper
 extern "C" {
@@ -34,7 +65,7 @@ extern "C" {
         if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
             esp_wifi_connect();
         } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-            if (s_retry_num < MAXIMUM_RETRY) {
+            if (s_retry_num < s_max_retry) {
                 esp_wifi_connect();
                 s_retry_num++;
                 ESP_LOGI(TAG, "Retrying connection to the AP...");
@@ -53,7 +84,9 @@ extern "C" {
 
 class WirelessManager {
 public:
-    void init() {
+    void init(const AppConfig& config) {
+        s_max_retry = config.wifi_retry;
+
         // 1. Initialize Non-Volatile Storage (NVS) - Required for Wi-Fi to store calibration data
         esp_err_t ret = nvs_flash_init();
         if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -88,8 +121,8 @@ public:
 
         // 4. Configure Wi-Fi Credentials safely inside standard raw primitives
         wifi_config_t wifi_config = {};
-        std::strcpy(reinterpret_cast<char*>(wifi_config.sta.ssid), WIFI_SSID);
-        std::strcpy(reinterpret_cast<char*>(wifi_config.sta.password), WIFI_PASS);
+        std::strncpy(reinterpret_cast<char*>(wifi_config.sta.ssid), config.wifi_ssid.c_str(), sizeof(wifi_config.sta.ssid));
+        std::strncpy(reinterpret_cast<char*>(wifi_config.sta.password), config.wifi_pass.c_str(), sizeof(wifi_config.sta.password));
         wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
@@ -106,12 +139,33 @@ public:
                 portMAX_DELAY);
 
         if (bits & WIFI_CONNECTED_BIT) {
-            std::cout << "🌐 [C++] Network established successfully to SSID: " << WIFI_SSID << std::endl;
+            std::cout << "[C++] Network established successfully to SSID: " << config.wifi_ssid << std::endl;
         } else if (bits & WIFI_FAIL_BIT) {
-            std::cout << "❌ [C++] Failed to authenticate or reach SSID: " << WIFI_SSID << std::endl;
+            std::cout << "[C++] Failed to authenticate or reach SSID: " << config.wifi_ssid << std::endl;
         } else {
             ESP_LOGE(TAG, "UNEXPECTED EVENT");
         }
+
+        std::cout << "Node data:";
+        std::string data = "";
+        data.append("UUID - ");
+        data.append(config.node_uuid);
+        data.append("\n");
+        data.append("Node state - ");
+        if (config.node_mode == NodeMode::INACTIVE)
+        {
+            data.append("INACTIVE");
+        }
+        else if (config.node_mode == NodeMode::MASTER)
+        {
+            data.append("MASTER");
+        }
+        else
+        {
+            data.append("SLAVE");
+        }
+        data.append("\n");
+        std::cout << data;
     }
 };
 
@@ -119,31 +173,45 @@ public:
 extern "C" void app_main(void)
 {
     runHwProbe();
-    std::cout << "🚀 Starting Pure C++ Asynchronous System Framework..." << std::endl;
+    std::cout << "Starting Pure C++ Asynchronous System Framework..." << std::endl;
+
+    // Initialize VFS (LittleFS)
+    esp_err_t err = VFS::init();
+    if (err != ESP_OK) {
+        std::cerr << "Failed to initialize VFS: " << esp_err_to_name(err) << std::endl;
+    }
+
+    AppConfig config;
+    if (!ConfigManager::load(config)) {
+        std::cerr << "Failed to load/create config file! Using defaults." << std::endl;
+        ConfigManager::get_default(config);
+    }
     
     WirelessManager wm;
-    wm.init();
+    wm.init(config);
 
-    int8_t ran_times = 0;
+    MqttManager mqtt;
+    mqtt.set_subscription_topic(config.mqtt_command_topic);
+    mqtt.set_command_callback([](const std::string& topic, const std::string& data) {
+        std::cout << "[MQTT] Received command on topic [" << topic << "]: " << data << std::endl;
+        if (data == "restart") {
+            std::cout << "Restarting system as requested..." << std::endl;
+            esp_restart();
+        } else if (data == "reset" || data == "reset_config") {
+            std::cout << "Resetting config.json to defaults..." << std::endl;
+            AppConfig defaultConfig;
+            ConfigManager::get_default(defaultConfig);
+            if (ConfigManager::save(defaultConfig)) {
+                std::cout << "Config reset successful! Restarting system..." << std::endl;
+                esp_restart();
+            } else {
+                std::cerr << "Failed to reset config!" << std::endl;
+            }
+        }
+    });
+    mqtt.init(config.mqtt_broker_url, config.mqtt_client_id, config.mqtt_pass, x1root);
 
     while (true) {
-        if (ran_times == 0)
-        {
-            std::cout << "Yo this is from main loop";
-        }
-        ran_times++;
-        printf("Restarting in %ss\n", std::to_string(10-ran_times).c_str());
-        if (ran_times == 10)
-        {
-            ran_times = 0;
-            std::cout<< "Restarting";
-            esp_restart();
-        }
-        if (ran_times > 10 || ran_times < 0)
-        {
-            std::cout << "Out of bounds. HOW THE FUCK DID WE GET THERE?";
-            ran_times = 0;
-        }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
