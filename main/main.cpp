@@ -15,6 +15,8 @@
 #include "modules/mqtt_manager.h"
 #include "modules/vfs.h"
 #include "modules/config_manager.h"
+#include "modules/state_manager.h"
+#include "modules/data_collection/tnh_sensor.h"
 #include <vector>
 #include <string_view>
 #include <ranges>
@@ -87,6 +89,7 @@ extern "C" {
         if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
             esp_wifi_connect();
         } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            SystemStateManager::get_instance().set_wifi_connected(false);
             if (s_retry_num < s_max_retry) {
                 esp_wifi_connect();
                 s_retry_num++;
@@ -99,6 +102,7 @@ extern "C" {
             ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
             ESP_LOGI(TAG, "Allocated IP Address: " IPSTR, IP2STR(&event->ip_info.ip));
             s_retry_num = 0;
+            SystemStateManager::get_instance().set_wifi_connected(true);
             xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         }
     }
@@ -208,9 +212,14 @@ extern "C" void app_main(void)
         std::cerr << "Failed to load/create config file! Using defaults." << std::endl;
         ConfigManager::get_default(config);
     }
+    SystemStateManager::get_instance().set_node_mode(config.node_mode);
     
     WirelessManager wm;
     wm.init(config);
+
+    // Create DHT11 sensor read task
+    static TnHSensor tnh_sensor(GPIO_NUM_17);
+    tnh_sensor.start();
 
     MqttManager mqtt;
     mqtt.set_subscription_topic(config.mqtt_command_topic);
@@ -253,6 +262,7 @@ extern "C" void app_main(void)
                     {
                         config.node_mode = NodeMode::SLAVE;
                     }
+                    SystemStateManager::get_instance().set_node_mode(config.node_mode);
                     ConfigManager::save(config);
                     std::cout << "[MQTT] Node state updated to " << state << " and saved successfully." << std::endl;
                     // call restart

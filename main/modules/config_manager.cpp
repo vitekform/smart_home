@@ -35,7 +35,7 @@ void ConfigManager::get_default(AppConfig& config) {
     config.wifi_pass = "ganamaga";
     config.wifi_retry = 5;
     config.mqtt_broker_url = "mqtts://b4aab6512bbd4adc8bcf3981fe64f1dc.s1.eu.hivemq.cloud";
-    config.mqtt_command_topic = "esp32/smrthome_cmd";
+    config.mqtt_command_topic = "smarthome/admincmd";
     config.mqtt_client_id = "esp_main";
     config.mqtt_pass = "qGq5o11h16zVvcncTYhv";
     config.node_mode = NodeMode::INACTIVE;

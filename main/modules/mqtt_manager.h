@@ -15,8 +15,10 @@ public:
     void init(const std::string& broker_url, const std::string& username, const std::string& password, const std::string& root_ca);
     void set_subscription_topic(const std::string& topic);
     void set_command_callback(CommandCallback callback);
+    static void broadcast(const std::string& channel, const std::string& message);
 
 private:
+    static MqttManager* s_instance;
     static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data);
     
     esp_mqtt_client_handle_t client;

@@ -17,4 +17,5 @@ dependencies:
   espressif/mqtt: '*'
   joltwallet/littlefs: ^1.22.1
   espressif/cjson: '*'
+  esp-idf-lib/dht: '*'
 
