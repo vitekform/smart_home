@@ -15,6 +15,9 @@
 #include "modules/mqtt_manager.h"
 #include "modules/vfs.h"
 #include "modules/config_manager.h"
+#include <vector>
+#include <string_view>
+#include <ranges>
 
 const char* x1root = "-----BEGIN CERTIFICATE-----\n"
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
@@ -56,6 +59,25 @@ static EventGroupHandle_t s_wifi_event_group;
 static const char *TAG = "WiFi_CPP";
 static int s_retry_num = 0;
 static int s_max_retry = 5;
+
+std::vector<std::string> splitBySequence(const std::string& text, const std::string& delimiter) {
+    std::vector<std::string> tokens;
+    size_t start = 0;
+    size_t end = text.find(delimiter);
+
+    while (end != std::string::npos) {
+        // Extrahujeme podřetězec od startu po nalezený oddělovač
+        tokens.push_back(text.substr(start, end - start));
+        // Posuneme start za nalezený oddělovač
+        start = end + delimiter.length();
+        // Hledáme další výskyt oddělovače
+        end = text.find(delimiter, start);
+    }
+
+    // Přidáme poslední zbývající část řetězce
+    tokens.push_back(text.substr(start));
+    return tokens;
+}
 
 // C-compatible event handler callback wrapper
 extern "C" {
@@ -192,7 +214,7 @@ extern "C" void app_main(void)
 
     MqttManager mqtt;
     mqtt.set_subscription_topic(config.mqtt_command_topic);
-    mqtt.set_command_callback([](const std::string& topic, const std::string& data) {
+    mqtt.set_command_callback([&config](const std::string& topic, const std::string& data) {
         std::cout << "[MQTT] Received command on topic [" << topic << "]: " << data << std::endl;
         if (data == "restart") {
             std::cout << "Restarting system as requested..." << std::endl;
@@ -206,6 +228,37 @@ extern "C" void app_main(void)
                 esp_restart();
             } else {
                 std::cerr << "Failed to reset config!" << std::endl;
+            }
+        } else if (data.starts_with("set_state"))
+        {
+            /*
+             * Structure
+             * set_state <node_uuid> <new_state_number>
+             */
+            std::string delimiter = " ";
+            std::vector<std::string> arr = splitBySequence(data, delimiter);
+            if (arr.size() >= 3) {
+                std::string uuid = arr[1];
+                if (config.node_uuid == uuid) {
+                    int state = std::stoi(arr[2]);
+                    if (state == 0)
+                    {
+                        config.node_mode = NodeMode::INACTIVE;
+                    }
+                    else if (state == 1)
+                    {
+                        config.node_mode = NodeMode::MASTER;
+                    }
+                    else if (state == 2)
+                    {
+                        config.node_mode = NodeMode::SLAVE;
+                    }
+                    ConfigManager::save(config);
+                    std::cout << "[MQTT] Node state updated to " << state << " and saved successfully." << std::endl;
+                    // call restart
+                    std::cout << "Restarting system because of configuration change of mode" << std::endl;
+                    esp_restart();
+                }
             }
         }
     });
