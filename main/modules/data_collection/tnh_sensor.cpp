@@ -8,7 +8,7 @@
 TnHSensor::TnHSensor(gpio_num_t pin) : gpio_pin(pin) {}
 
 void TnHSensor::start() {
-    if (SystemStateManager::get_instance().get_node_mode() == NodeMode::MASTER)
+    if (SystemStateManager::get_instance().get_node_mode() == NodeMode::METEO)
     {
         xTaskCreate(sensor_task, "tnh_sensor_task", 4096, this, 5, nullptr);
     }
@@ -29,11 +29,14 @@ void TnHSensor::sensor_task(void* pvParameters) {
                 std::cout << "[DHT11] Temperature: " << temperature << " °C, Humidity: " << humidity << " %" << std::endl;
                 SystemStateManager::get_instance().set_sensor_data(temperature, humidity);
                 std::string msg = "";
-                msg.append("tmp:");
+                std::string uuid = SystemStateManager::get_instance().get_node_uuid();
+                msg.append("meteo_data");
+                msg.append(" ");
+                msg.append(uuid);
+                msg.append(" ");
                 msg.append(std::to_string(temperature));
-                msg.append(" hum:");
+                msg.append(" ");
                 msg.append(std::to_string(humidity));
-                msg.append("\\END\\");
                 MqttManager::broadcast("smarthome/internal", msg);
             } else {
                 retry_count++;

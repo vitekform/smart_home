@@ -13,8 +13,8 @@ public:
     ~MqttManager();
 
     void init(const std::string& broker_url, const std::string& username, const std::string& password, const std::string& root_ca);
-    void set_subscription_topic(const std::string& topic);
-    void set_command_callback(CommandCallback callback);
+    void set_topic1(const std::string& topic, CommandCallback callback);
+    void set_topic2(const std::string& topic, CommandCallback callback);
     static void broadcast(const std::string& channel, const std::string& message);
 
 private:
@@ -22,9 +22,11 @@ private:
     static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data);
     
     esp_mqtt_client_handle_t client;
-    CommandCallback command_callback;
+    CommandCallback callback1;
+    CommandCallback callback2;
     std::string broker_url;
-    std::string subscription_topic;
+    std::string subscription_topic1;
+    std::string subscription_topic2;
     std::string username;
     std::string password;
     std::string root_ca;

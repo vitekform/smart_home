@@ -10,6 +10,7 @@ struct AppConfig {
     int wifi_retry;
     std::string mqtt_broker_url;
     std::string mqtt_command_topic;
+    std::string mqtt_internal_topic;
     std::string mqtt_client_id;
     std::string mqtt_pass;
     NodeMode node_mode;

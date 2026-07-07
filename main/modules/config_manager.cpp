@@ -36,6 +36,7 @@ void ConfigManager::get_default(AppConfig& config) {
     config.wifi_retry = 5;
     config.mqtt_broker_url = "mqtts://b4aab6512bbd4adc8bcf3981fe64f1dc.s1.eu.hivemq.cloud";
     config.mqtt_command_topic = "smarthome/admincmd";
+    config.mqtt_internal_topic = "smarthome/internal";
     config.mqtt_client_id = "esp_main";
     config.mqtt_pass = "qGq5o11h16zVvcncTYhv";
     config.node_mode = NodeMode::INACTIVE;
@@ -104,6 +105,13 @@ bool ConfigManager::load(AppConfig& config, const std::string& path) {
         needs_save = true;
     }
 
+    cJSON* mqtt_internal_topic_item = cJSON_GetObjectItem(root, "mqtt_internal_topic");
+    if (cJSON_IsString(mqtt_internal_topic_item) && mqtt_internal_topic_item->valuestring != nullptr) {
+        config.mqtt_internal_topic = mqtt_internal_topic_item->valuestring;
+    } else {
+        needs_save = true;
+    }
+
     cJSON* mqtt_client_item = cJSON_GetObjectItem(root, "mqtt_client_id");
     if (cJSON_IsString(mqtt_client_item) && mqtt_client_item->valuestring != nullptr) {
         config.mqtt_client_id = mqtt_client_item->valuestring;
@@ -157,6 +165,7 @@ bool ConfigManager::save(const AppConfig& config, const std::string& path) {
     cJSON_AddNumberToObject(root, "wifi_retry", config.wifi_retry);
     cJSON_AddStringToObject(root, "mqtt_broker_url", config.mqtt_broker_url.c_str());
     cJSON_AddStringToObject(root, "mqtt_command_topic", config.mqtt_command_topic.c_str());
+    cJSON_AddStringToObject(root, "mqtt_internal_topic", config.mqtt_internal_topic.c_str());
     cJSON_AddStringToObject(root, "mqtt_client_id", config.mqtt_client_id.c_str());
     cJSON_AddStringToObject(root, "mqtt_pass", config.mqtt_pass.c_str());
     cJSON_AddNumberToObject(root, "node_mode", static_cast<int>(config.node_mode));

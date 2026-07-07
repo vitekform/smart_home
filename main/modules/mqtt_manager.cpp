@@ -39,12 +39,14 @@ void MqttManager::init(const std::string& broker_url, const std::string& usernam
     esp_mqtt_client_start(client);
 }
 
-void MqttManager::set_subscription_topic(const std::string& topic) {
-    this->subscription_topic = topic;
+void MqttManager::set_topic1(const std::string& topic, CommandCallback callback) {
+    this->subscription_topic1 = topic;
+    this->callback1 = callback;
 }
 
-void MqttManager::set_command_callback(CommandCallback callback) {
-    command_callback = callback;
+void MqttManager::set_topic2(const std::string& topic, CommandCallback callback) {
+    this->subscription_topic2 = topic;
+    this->callback2 = callback;
 }
 
 void MqttManager::broadcast(const std::string& channel, const std::string& message) {
@@ -65,9 +67,13 @@ void MqttManager::mqtt_event_handler(void* handler_args, esp_event_base_t base, 
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
             SystemStateManager::get_instance().set_mqtt_connected(true);
-            if (!manager->subscription_topic.empty()) {
-                int msg_id = esp_mqtt_client_subscribe(manager->client, manager->subscription_topic.c_str(), 0);
-                ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+            if (!manager->subscription_topic1.empty()) {
+                int msg_id = esp_mqtt_client_subscribe(manager->client, manager->subscription_topic1.c_str(), 0);
+                ESP_LOGI(TAG, "sent subscribe successful for topic 1, msg_id=%d", msg_id);
+            }
+            if (!manager->subscription_topic2.empty()) {
+                int msg_id = esp_mqtt_client_subscribe(manager->client, manager->subscription_topic2.c_str(), 0);
+                ESP_LOGI(TAG, "sent subscribe successful for topic 2, msg_id=%d", msg_id);
             }
             break;
         case MQTT_EVENT_DISCONNECTED:
@@ -85,10 +91,20 @@ void MqttManager::mqtt_event_handler(void* handler_args, esp_event_base_t base, 
             break;
         case MQTT_EVENT_DATA:
             ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-            if (manager->command_callback) {
+            {
                 std::string topic(event->topic, event->topic_len);
                 std::string data(event->data, event->data_len);
-                manager->command_callback(topic, data);
+                if (topic == manager->subscription_topic1) {
+                    if (manager->callback1) {
+                        manager->callback1(topic, data);
+                    }
+                } else if (topic == manager->subscription_topic2) {
+                    if (manager->callback2) {
+                        manager->callback2(topic, data);
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Received message on unhandled topic: %s", topic.c_str());
+                }
             }
             break;
         case MQTT_EVENT_ERROR:

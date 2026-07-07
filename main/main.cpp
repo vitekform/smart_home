@@ -20,6 +20,7 @@
 #include <vector>
 #include <string_view>
 #include <ranges>
+#include "driver/gpio.h"
 
 const char* x1root = "-----BEGIN CERTIFICATE-----\n"
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
@@ -195,6 +196,167 @@ public:
     }
 };
 
+void handle_command_topic(const std::string& topic, const std::string& data, AppConfig& config) {
+    std::cout << "[MQTT] Received command on topic [" << topic << "]: " << data << std::endl;
+    if (data == "restart") {
+        std::cout << "Restarting system as requested..." << std::endl;
+        esp_restart();
+    } else if (data == "reset" || data == "reset_config") {
+        std::cout << "Resetting config.json to defaults..." << std::endl;
+        AppConfig defaultConfig;
+        ConfigManager::get_default(defaultConfig);
+        if (ConfigManager::save(defaultConfig)) {
+            std::cout << "Config reset successful! Restarting system..." << std::endl;
+            esp_restart();
+        } else {
+            std::cerr << "Failed to reset config!" << std::endl;
+        }
+    } else if (data.starts_with("set_state"))
+    {
+        /*
+         * Structure
+         * set_state <node_uuid> <new_state_number>
+         */
+        std::string delimiter = " ";
+        std::vector<std::string> arr = splitBySequence(data, delimiter);
+        if (arr.size() >= 3) {
+            std::string uuid = arr[1];
+            if (config.node_uuid == uuid) {
+                int state = std::stoi(arr[2]);
+                if (state == 0)
+                {
+                    config.node_mode = NodeMode::INACTIVE;
+                }
+                else if (state == 1)
+                {
+                    config.node_mode = NodeMode::MASTER;
+                }
+                else if (state == 2)
+                {
+                    config.node_mode = NodeMode::SLAVE;
+                }
+                else if (state == 3)
+                {
+                    config.node_mode = NodeMode::METEO;
+                }
+                SystemStateManager::get_instance().set_node_mode(config.node_mode);
+                ConfigManager::save(config);
+                std::cout << "[MQTT] Node state updated to " << state << " and saved successfully." << std::endl;
+                // call restart
+                std::cout << "Restarting system because of configuration change of mode" << std::endl;
+                esp_restart();
+            }
+        }
+    }
+}
+
+void handle_internal_topic(const std::string& topic, const std::string& data) {
+    std::cout << "[MQTT] Received internal message on topic [" << topic << "]: " << data << std::endl;
+
+    if (SystemStateManager::get_instance().get_node_mode() == NodeMode::INACTIVE)
+    {
+        return;
+    }
+    if (SystemStateManager::get_instance().get_node_mode() == NodeMode::MASTER)
+    {
+        if (data.starts_with("dev_poll_rsp"))
+        {
+            std::string delimiter = " ";
+            std::vector<std::string> arr = splitBySequence(data, delimiter);
+            if (arr.size() >= 3) {
+                std::string registered_uuid = arr[1];
+                std::string node_t = arr[2];
+                if (node_t == "SLAVE")
+                {
+                    if (!SystemStateManager::get_instance().has_slave_uuid(registered_uuid)) {
+                        SystemStateManager::get_instance().add_slave_uuid(registered_uuid);
+                        std::cout << "[MASTER] Registered new slave with UUID: " << registered_uuid << std::endl;
+                    }
+                    else {
+                        std::cout << "[MASTER] Slave with UUID: " << registered_uuid << " is already registered." << std::endl;
+                    }
+                }
+                else if (node_t == "METEO")
+                {
+                    if (!SystemStateManager::get_instance().has_meteo_uuid(registered_uuid)) {
+                        SystemStateManager::get_instance().add_meteo_uuid(registered_uuid);
+                        std::cout << "[MASTER] Registered new meteo node with UUID: " << registered_uuid << std::endl;
+                    }
+                    else {
+                        std::cout << "[MASTER] Meteo node with UUID: " << registered_uuid << " is already registered." << std::endl;
+                    }
+                }
+
+            }
+        }
+    }
+    // Slave or Meteo
+    else
+    {
+        if (data.starts_with("dev_poll") && !data.starts_with("dev_poll_rsp"))
+        {
+            std::string msg = "dev_poll_rsp";
+            msg.append(" ");
+            msg.append(SystemStateManager::get_instance().get_node_uuid());
+            msg.append(" ");
+            if (SystemStateManager::get_instance().get_node_mode() == NodeMode::METEO)
+            {
+                msg.append("METEO");
+            }
+            else
+            {
+                msg.append("SLAVE");
+            }
+            MqttManager::broadcast("smarthome/internal", msg);
+        }
+        else if (data.starts_with("dev_set_pin"))
+        {
+            std::string delimiter = " ";
+            std::vector<std::string> arr = splitBySequence(data, delimiter);
+            if (arr.size() >= 4)
+            {
+                std::string uuid = arr.at(1);
+                std::string pin = arr.at(2);
+                std::string value = arr.at(3); // HIGH or LOW
+                int val = 0;
+                if (value == "HIGH")
+                {
+                    val = 1;
+                }
+
+                if (uuid == SystemStateManager::get_instance().get_node_uuid())
+                {
+                    std::cout<<"Setting pin " << pin << " to " << value << std::endl;
+                    auto pin_num = static_cast<gpio_num_t>(std::stoi(pin));
+                    gpio_reset_pin(pin_num);
+                    gpio_set_direction(pin_num, GPIO_MODE_OUTPUT);
+                    gpio_set_level(pin_num, val);
+                }
+                return;
+            }
+        }
+    }
+}
+
+static std::string s_internal_topic;
+
+static void master_poll_task(void* pvParameters) {
+    std::cout << "[MASTER POLL] Starting master polling task. Interval: 2 minutes." << std::endl;
+    while (true) {
+        // Wait 2 minutes (120 seconds)
+        vTaskDelay(pdMS_TO_TICKS(120000));
+
+        if (SystemStateManager::get_instance().get_node_mode() == NodeMode::MASTER) {
+            // First, process the round timeout (marks missed responses, removes inactive slaves, resets flags)
+            SystemStateManager::get_instance().process_round_timeout();
+
+            // Then, send the new dev_poll broadcast
+            std::cout << "[MASTER POLL] Broadcasting dev_poll on topic: " << s_internal_topic << std::endl;
+            MqttManager::broadcast(s_internal_topic, "dev_poll");
+        }
+    }
+}
+
 // Main execution frame
 extern "C" void app_main(void)
 {
@@ -213,64 +375,27 @@ extern "C" void app_main(void)
         ConfigManager::get_default(config);
     }
     SystemStateManager::get_instance().set_node_mode(config.node_mode);
+    SystemStateManager::get_instance().set_node_uuid(config.node_uuid);
     
     WirelessManager wm;
     wm.init(config);
 
     // Create DHT11 sensor read task
-    static TnHSensor tnh_sensor(GPIO_NUM_17);
+    static TnHSensor tnh_sensor(GPIO_NUM_5);
     tnh_sensor.start();
 
+    // Create master polling task if node is MASTER
+    s_internal_topic = config.mqtt_internal_topic;
+    if (config.node_mode == NodeMode::MASTER) {
+        xTaskCreate(master_poll_task, "master_poll_task", 4096, nullptr, 5, nullptr);
+    }
+
     MqttManager mqtt;
-    mqtt.set_subscription_topic(config.mqtt_command_topic);
-    mqtt.set_command_callback([&config](const std::string& topic, const std::string& data) {
-        std::cout << "[MQTT] Received command on topic [" << topic << "]: " << data << std::endl;
-        if (data == "restart") {
-            std::cout << "Restarting system as requested..." << std::endl;
-            esp_restart();
-        } else if (data == "reset" || data == "reset_config") {
-            std::cout << "Resetting config.json to defaults..." << std::endl;
-            AppConfig defaultConfig;
-            ConfigManager::get_default(defaultConfig);
-            if (ConfigManager::save(defaultConfig)) {
-                std::cout << "Config reset successful! Restarting system..." << std::endl;
-                esp_restart();
-            } else {
-                std::cerr << "Failed to reset config!" << std::endl;
-            }
-        } else if (data.starts_with("set_state"))
-        {
-            /*
-             * Structure
-             * set_state <node_uuid> <new_state_number>
-             */
-            std::string delimiter = " ";
-            std::vector<std::string> arr = splitBySequence(data, delimiter);
-            if (arr.size() >= 3) {
-                std::string uuid = arr[1];
-                if (config.node_uuid == uuid) {
-                    int state = std::stoi(arr[2]);
-                    if (state == 0)
-                    {
-                        config.node_mode = NodeMode::INACTIVE;
-                    }
-                    else if (state == 1)
-                    {
-                        config.node_mode = NodeMode::MASTER;
-                    }
-                    else if (state == 2)
-                    {
-                        config.node_mode = NodeMode::SLAVE;
-                    }
-                    SystemStateManager::get_instance().set_node_mode(config.node_mode);
-                    ConfigManager::save(config);
-                    std::cout << "[MQTT] Node state updated to " << state << " and saved successfully." << std::endl;
-                    // call restart
-                    std::cout << "Restarting system because of configuration change of mode" << std::endl;
-                    esp_restart();
-                }
-            }
-        }
+    mqtt.set_topic1(config.mqtt_command_topic, [&config](const std::string& topic, const std::string& data) {
+        handle_command_topic(topic, data, config);
+    });
+    mqtt.set_topic2(config.mqtt_internal_topic, [](const std::string& topic, const std::string& data) {
+        handle_internal_topic(topic, data);
     });
     mqtt.init(config.mqtt_broker_url, config.mqtt_client_id, config.mqtt_pass, x1root);
 
