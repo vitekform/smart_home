@@ -18,4 +18,8 @@ dependencies:
   joltwallet/littlefs: ^1.22.1
   espressif/cjson: '*'
   esp-idf-lib/dht: '*'
+  esp-idf-lib/i2cdev: '*'
+  esp-idf-lib/sht4x: '*'
+  esp-idf-lib/bmp280: '*'
+  lvgl/lvgl: "^9.1.0"
 

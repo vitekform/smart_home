@@ -27,6 +27,26 @@ void SystemStateManager::set_node_uuid(const std::string& uuid) {
     node_uuid = uuid;
 }
 
+std::string SystemStateManager::get_room() const {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return node_room;
+}
+
+void SystemStateManager::set_room(const std::string& room) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    node_room = room;
+}
+
+std::string SystemStateManager::get_tasks_string() const {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    return tasks_string;
+}
+
+void SystemStateManager::set_tasks_string(const std::string& tasks_str) {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    tasks_string = tasks_str;
+}
+
 std::string SystemStateManager::get_node_mode_str() const {
     std::lock_guard<std::mutex> lock(state_mutex);
     switch (current_node_mode) {

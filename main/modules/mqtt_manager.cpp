@@ -31,8 +31,16 @@ void MqttManager::init(const std::string& broker_url, const std::string& usernam
     mqtt_cfg.broker.address.uri = this->broker_url.c_str();
     mqtt_cfg.credentials.username = this->username.c_str();
     mqtt_cfg.credentials.authentication.password = this->password.c_str();
-    mqtt_cfg.broker.address.port = 8883;
-    mqtt_cfg.broker.verification.certificate = this->root_ca.c_str();
+
+    // Dynamically set TLS properties based on URI scheme
+    if (this->broker_url.rfind("mqtts://", 0) == 0 || this->broker_url.rfind("ssl://", 0) == 0) {
+        mqtt_cfg.broker.address.port = 8883;
+        mqtt_cfg.broker.verification.certificate = this->root_ca.c_str();
+        ESP_LOGI(TAG, "Configuring secure MQTTS connection on port 8883");
+    } else {
+        mqtt_cfg.broker.address.port = 1883;
+        ESP_LOGI(TAG, "Configuring unencrypted MQTT connection on port 1883");
+    }
 
     client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqtt_event_handler, this);

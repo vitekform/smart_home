@@ -22,6 +22,14 @@ public:
     std::string get_node_uuid() const;
     void set_node_uuid(const std::string& uuid);
 
+    // Node Room
+    std::string get_room() const;
+    void set_room(const std::string& room);
+
+    // Tasks String
+    std::string get_tasks_string() const;
+    void set_tasks_string(const std::string& tasks_str);
+
     // WiFi connection state
     bool is_wifi_connected() const;
     void set_wifi_connected(bool connected);
@@ -73,4 +81,6 @@ private:
     float last_humidity{0.0f};
     std::vector<SlaveInfo> slave_registry;
     std::vector<MeteoInfo> meteo_registry;
+    std::string node_room;
+    std::string tasks_string;
 };

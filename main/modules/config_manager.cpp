@@ -31,8 +31,8 @@ static std::string generate_uuid_v4() {
 }
 
 void ConfigManager::get_default(AppConfig& config) {
-    config.wifi_ssid = "NSA Surveillance Van - 942";
-    config.wifi_pass = "ganamaga";
+    config.wifi_ssid = "sh-2g";
+    config.wifi_pass = "123456789";
     config.wifi_retry = 5;
     config.mqtt_broker_url = "mqtts://b4aab6512bbd4adc8bcf3981fe64f1dc.s1.eu.hivemq.cloud";
     config.mqtt_command_topic = "smarthome/admincmd";
@@ -41,6 +41,16 @@ void ConfigManager::get_default(AppConfig& config) {
     config.mqtt_pass = "qGq5o11h16zVvcncTYhv";
     config.node_mode = NodeMode::INACTIVE;
     config.node_uuid = generate_uuid_v4();
+    config.room = "living_room";
+    config.optimal_temp = 22.0f;
+    config.temp_threshold = 0.5f;
+    config.tasks.clear();
+    TaskConfig default_task;
+    default_task.type = "HAC";
+    default_task.room = "living_room";
+    default_task.heating_pin = 5;
+    default_task.cooling_pin = 6;
+    config.tasks.push_back(default_task);
 }
 
 bool ConfigManager::load(AppConfig& config, const std::string& path) {
@@ -142,6 +152,106 @@ bool ConfigManager::load(AppConfig& config, const std::string& path) {
         needs_save = true;
     }
 
+    cJSON* room_item = cJSON_GetObjectItem(root, "room");
+    if (cJSON_IsString(room_item) && room_item->valuestring != nullptr) {
+        config.room = room_item->valuestring;
+    } else {
+        config.room = "living_room";
+        needs_save = true;
+    }
+
+    cJSON* optimal_temp_item = cJSON_GetObjectItem(root, "optimal_temp");
+    if (cJSON_IsNumber(optimal_temp_item)) {
+        config.optimal_temp = (float)optimal_temp_item->valuedouble;
+    } else {
+        config.optimal_temp = 22.0f;
+        needs_save = true;
+    }
+
+    cJSON* temp_threshold_item = cJSON_GetObjectItem(root, "temp_threshold");
+    if (cJSON_IsNumber(temp_threshold_item)) {
+        config.temp_threshold = (float)temp_threshold_item->valuedouble;
+    } else {
+        config.temp_threshold = 0.5f;
+        needs_save = true;
+    }
+
+    cJSON* tasks_array = cJSON_GetObjectItem(root, "tasks");
+    if (cJSON_IsArray(tasks_array)) {
+        config.tasks.clear();
+        int size = cJSON_GetArraySize(tasks_array);
+        for (int i = 0; i < size; ++i) {
+            cJSON* item = cJSON_GetArrayItem(tasks_array, i);
+            if (cJSON_IsObject(item)) {
+                TaskConfig task;
+                cJSON* type_item = cJSON_GetObjectItem(item, "type");
+                cJSON* task_room_item = cJSON_GetObjectItem(item, "room");
+                cJSON* h_pin_item = cJSON_GetObjectItem(item, "heating_pin");
+                cJSON* c_pin_item = cJSON_GetObjectItem(item, "cooling_pin");
+                cJSON* pin_num_item = cJSON_GetObjectItem(item, "pin_num");
+                cJSON* sda_pin_item = cJSON_GetObjectItem(item, "sda_pin");
+                cJSON* scl_pin_item = cJSON_GetObjectItem(item, "scl_pin");
+
+                if (cJSON_IsString(type_item) && type_item->valuestring != nullptr) {
+                    task.type = type_item->valuestring;
+                }
+                if (cJSON_IsString(task_room_item) && task_room_item->valuestring != nullptr) {
+                    task.room = task_room_item->valuestring;
+                }
+                if (cJSON_IsNumber(h_pin_item)) {
+                    task.heating_pin = h_pin_item->valueint;
+                }
+                if (cJSON_IsNumber(c_pin_item)) {
+                    task.cooling_pin = c_pin_item->valueint;
+                }
+                if (cJSON_IsNumber(pin_num_item)) {
+                    task.pin_num = pin_num_item->valueint;
+                }
+                if (cJSON_IsNumber(sda_pin_item)) {
+                    task.sda_pin = sda_pin_item->valueint;
+                }
+                if (cJSON_IsNumber(scl_pin_item)) {
+                    task.scl_pin = scl_pin_item->valueint;
+                }
+                config.tasks.push_back(task);
+            }
+        }
+        if (config.tasks.empty()) {
+            if (config.node_mode == NodeMode::METEO) {
+                TaskConfig default_task;
+                default_task.type = "dht11";
+                default_task.room = config.room;
+                default_task.pin_num = 5;
+                config.tasks.push_back(default_task);
+            } else {
+                TaskConfig default_task;
+                default_task.type = "HAC";
+                default_task.room = config.room;
+                default_task.heating_pin = 12;
+                default_task.cooling_pin = 13;
+                config.tasks.push_back(default_task);
+            }
+            needs_save = true;
+        }
+    } else {
+        config.tasks.clear();
+        if (config.node_mode == NodeMode::METEO) {
+            TaskConfig default_task;
+            default_task.type = "dht11";
+            default_task.room = config.room;
+            default_task.pin_num = 5;
+            config.tasks.push_back(default_task);
+        } else {
+            TaskConfig default_task;
+            default_task.type = "HAC";
+            default_task.room = config.room;
+            default_task.heating_pin = 12;
+            default_task.cooling_pin = 13;
+            config.tasks.push_back(default_task);
+        }
+        needs_save = true;
+    }
+
     cJSON_Delete(root);
 
     if (needs_save) {
@@ -170,6 +280,23 @@ bool ConfigManager::save(const AppConfig& config, const std::string& path) {
     cJSON_AddStringToObject(root, "mqtt_pass", config.mqtt_pass.c_str());
     cJSON_AddNumberToObject(root, "node_mode", static_cast<int>(config.node_mode));
     cJSON_AddStringToObject(root, "node_uuid", config.node_uuid.c_str());
+    cJSON_AddStringToObject(root, "room", config.room.c_str());
+    cJSON_AddNumberToObject(root, "optimal_temp", config.optimal_temp);
+    cJSON_AddNumberToObject(root, "temp_threshold", config.temp_threshold);
+
+    cJSON* tasks_array = cJSON_CreateArray();
+    for (const auto& task : config.tasks) {
+        cJSON* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "type", task.type.c_str());
+        cJSON_AddStringToObject(item, "room", task.room.c_str());
+        cJSON_AddNumberToObject(item, "heating_pin", task.heating_pin);
+        cJSON_AddNumberToObject(item, "cooling_pin", task.cooling_pin);
+        cJSON_AddNumberToObject(item, "pin_num", task.pin_num);
+        cJSON_AddNumberToObject(item, "sda_pin", task.sda_pin);
+        cJSON_AddNumberToObject(item, "scl_pin", task.scl_pin);
+        cJSON_AddItemToArray(tasks_array, item);
+    }
+    cJSON_AddItemToObject(root, "tasks", tasks_array);
 
     char* rendered = cJSON_Print(root);
     cJSON_Delete(root);

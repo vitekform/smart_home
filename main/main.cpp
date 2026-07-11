@@ -17,6 +17,8 @@
 #include "modules/config_manager.h"
 #include "modules/state_manager.h"
 #include "modules/data_collection/tnh_sensor.h"
+#include "modules/data_collection/out_sensor.h"
+#include "modules/display_manager.h"
 #include <vector>
 #include <string_view>
 #include <ranges>
@@ -187,6 +189,10 @@ public:
         {
             data.append("MASTER");
         }
+        else if (config.node_mode == NodeMode::METEO)
+        {
+            data.append("METEO");
+        }
         else
         {
             data.append("SLAVE");
@@ -226,18 +232,33 @@ void handle_command_topic(const std::string& topic, const std::string& data, App
                 if (state == 0)
                 {
                     config.node_mode = NodeMode::INACTIVE;
+                    config.tasks.clear();
                 }
                 else if (state == 1)
                 {
                     config.node_mode = NodeMode::MASTER;
+                    config.tasks.clear();
                 }
                 else if (state == 2)
                 {
                     config.node_mode = NodeMode::SLAVE;
+                    config.tasks.clear();
+                    TaskConfig default_task;
+                    default_task.type = "HAC";
+                    default_task.room = config.room;
+                    default_task.heating_pin = 12;
+                    default_task.cooling_pin = 13;
+                    config.tasks.push_back(default_task);
                 }
                 else if (state == 3)
                 {
                     config.node_mode = NodeMode::METEO;
+                    config.tasks.clear();
+                    TaskConfig default_task;
+                    default_task.type = "dht11";
+                    default_task.room = config.room;
+                    default_task.pin_num = 5;
+                    config.tasks.push_back(default_task);
                 }
                 SystemStateManager::get_instance().set_node_mode(config.node_mode);
                 ConfigManager::save(config);
@@ -245,6 +266,77 @@ void handle_command_topic(const std::string& topic, const std::string& data, App
                 // call restart
                 std::cout << "Restarting system because of configuration change of mode" << std::endl;
                 esp_restart();
+            }
+        }
+    } else if (data.starts_with("set_room")) {
+        std::string delimiter = " ";
+        std::vector<std::string> arr = splitBySequence(data, delimiter);
+        if (arr.size() >= 3) {
+            std::string uuid = arr[1];
+            if (config.node_uuid == uuid) {
+                std::string room = arr[2];
+                config.room = room;
+                ConfigManager::save(config);
+                std::cout << "[MQTT] Room updated to " << room << " and saved successfully. Restarting..." << std::endl;
+                esp_restart();
+            }
+        }
+    } else if (data.starts_with("set_tasks")) {
+        std::string delimiter = " ";
+        std::vector<std::string> arr = splitBySequence(data, delimiter);
+        if (arr.size() >= 3) {
+            std::string uuid = arr[1];
+            if (config.node_uuid == uuid) {
+                std::string tasks_payload = arr[2];
+                bool success = false;
+                if (config.node_mode == NodeMode::METEO) {
+                    config.tasks.clear();
+                    std::vector<std::string> task_tokens = splitBySequence(tasks_payload, ",");
+                    for (const auto& token : task_tokens) {
+                        std::vector<std::string> parts = splitBySequence(token, ";");
+                        if (parts.size() >= 2) {
+                            TaskConfig tc;
+                            tc.type = parts[0];
+                            tc.room = config.room;
+                            if (tc.type == "dht11") {
+                                tc.pin_num = std::stoi(parts[1]);
+                                config.tasks.push_back(tc);
+                            } else if (tc.type == "out" && parts.size() >= 3) {
+                                tc.sda_pin = std::stoi(parts[1]);
+                                tc.scl_pin = std::stoi(parts[2]);
+                                config.tasks.push_back(tc);
+                            }
+                        }
+                    }
+                    success = true;
+                } else if (config.node_mode == NodeMode::SLAVE) {
+                    config.tasks.clear();
+                    std::vector<std::string> task_tokens = splitBySequence(tasks_payload, ";");
+                    for (const auto& token : task_tokens) {
+                        std::vector<std::string> parts = splitBySequence(token, ":");
+                        if (parts.size() >= 3) {
+                            TaskConfig tc;
+                            tc.type = parts[0];
+                            tc.room = parts[1];
+                            std::vector<std::string> pins = splitBySequence(parts[2], ",");
+                            if (tc.type == "HAC" && pins.size() >= 2) {
+                                tc.heating_pin = std::stoi(pins[0]);
+                                tc.cooling_pin = std::stoi(pins[1]);
+                                config.tasks.push_back(tc);
+                            } else if (pins.size() >= 1) {
+                                tc.heating_pin = std::stoi(pins[0]);
+                                config.tasks.push_back(tc);
+                            }
+                        }
+                    }
+                    success = true;
+                }
+                
+                if (success) {
+                    ConfigManager::save(config);
+                    std::cout << "[MQTT] Tasks updated and saved. Restarting..." << std::endl;
+                    esp_restart();
+                }
             }
         }
     }
@@ -289,6 +381,21 @@ void handle_internal_topic(const std::string& topic, const std::string& data) {
 
             }
         }
+        else if (data.starts_with("meteo_data"))
+        {
+            std::string delimiter = " ";
+            std::vector<std::string> arr = splitBySequence(data, delimiter);
+            if (arr.size() >= 4) {
+                std::string uuid = arr[1];
+                float temp = (float)std::strtof(arr[2].c_str(), nullptr);
+                float hum = (float)std::strtof(arr[3].c_str(), nullptr);
+                SystemStateManager::get_instance().set_sensor_data(temp, hum);
+                if (!SystemStateManager::get_instance().has_meteo_uuid(uuid)) {
+                    SystemStateManager::get_instance().add_meteo_uuid(uuid);
+                    std::cout << "[MASTER] Registered new meteo node from meteo_data with UUID: " << uuid << std::endl;
+                }
+            }
+        }
     }
     // Slave or Meteo
     else
@@ -302,10 +409,16 @@ void handle_internal_topic(const std::string& topic, const std::string& data) {
             if (SystemStateManager::get_instance().get_node_mode() == NodeMode::METEO)
             {
                 msg.append("METEO");
+                msg.append(" ");
+                msg.append(SystemStateManager::get_instance().get_room().empty() ? "living_room" : SystemStateManager::get_instance().get_room());
+                msg.append(" ");
+                msg.append(SystemStateManager::get_instance().get_tasks_string().empty() ? "none" : SystemStateManager::get_instance().get_tasks_string());
             }
             else
             {
                 msg.append("SLAVE");
+                msg.append(" ");
+                msg.append(SystemStateManager::get_instance().get_tasks_string().empty() ? "none" : SystemStateManager::get_instance().get_tasks_string());
             }
             MqttManager::broadcast("smarthome/internal", msg);
         }
@@ -376,18 +489,66 @@ extern "C" void app_main(void)
     }
     SystemStateManager::get_instance().set_node_mode(config.node_mode);
     SystemStateManager::get_instance().set_node_uuid(config.node_uuid);
+    SystemStateManager::get_instance().set_room(config.room);
+
+    // Build tasks string
+    std::string tasks_str = "";
+    if (config.node_mode == NodeMode::METEO) {
+        for (const auto& task : config.tasks) {
+            if (task.type == "dht11" && task.pin_num != -1) {
+                tasks_str = "dht11;" + std::to_string(task.pin_num);
+                break;
+            } else if (task.type == "out" && task.sda_pin != -1 && task.scl_pin != -1) {
+                tasks_str = "out;" + std::to_string(task.sda_pin) + ";" + std::to_string(task.scl_pin);
+                break;
+            }
+        }
+    } else if (config.node_mode == NodeMode::SLAVE) {
+        for (size_t i = 0; i < config.tasks.size(); ++i) {
+            const auto& task = config.tasks[i];
+            tasks_str += task.type + ":" + task.room + ":";
+            if (task.type == "HAC") {
+                tasks_str += std::to_string(task.heating_pin) + "," + std::to_string(task.cooling_pin);
+            } else {
+                tasks_str += std::to_string(task.heating_pin);
+            }
+            if (i < config.tasks.size() - 1) {
+                tasks_str += ";";
+            }
+        }
+    }
+    SystemStateManager::get_instance().set_tasks_string(tasks_str);
     
     WirelessManager wm;
     wm.init(config);
 
-    // Create DHT11 sensor read task
-    static TnHSensor tnh_sensor(GPIO_NUM_5);
-    tnh_sensor.start();
+    // Create sensor read task based on dynamic configuration
+    if (config.node_mode == NodeMode::METEO) {
+        for (const auto& task : config.tasks) {
+            if (task.type == "dht11" && task.pin_num != -1) {
+                std::cout << "[METEO] Spawning DHT11 task on GPIO " << task.pin_num << std::endl;
+                auto* dht = new TnHSensor(static_cast<gpio_num_t>(task.pin_num));
+                dht->start();
+                break;
+            } else if (task.type == "out" && task.sda_pin != -1 && task.scl_pin != -1) {
+                std::cout << "[METEO] Spawning Outdoor THP task on SDA: " << task.sda_pin << ", SCL: " << task.scl_pin << std::endl;
+                auto* out = new OutSensor(static_cast<gpio_num_t>(task.sda_pin), static_cast<gpio_num_t>(task.scl_pin));
+                out->start();
+                break;
+            }
+        }
+    }
 
     // Create master polling task if node is MASTER
     s_internal_topic = config.mqtt_internal_topic;
     if (config.node_mode == NodeMode::MASTER) {
         xTaskCreate(master_poll_task, "master_poll_task", 4096, nullptr, 5, nullptr);
+#if CONFIG_IDF_TARGET_ESP32
+        DisplayManager::get_instance().init(GPIO_NUM_21, GPIO_NUM_22);
+#else
+        DisplayManager::get_instance().init(GPIO_NUM_8, GPIO_NUM_9);
+#endif
+        DisplayManager::get_instance().start();
     }
 
     MqttManager mqtt;

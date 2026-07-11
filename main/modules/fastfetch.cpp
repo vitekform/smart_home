@@ -153,10 +153,11 @@ void runHwProbe(){
     ss_uptime << s << "s";
     info.push_back("Uptime: " + ss_uptime.str());
 
+    // BT and BLE are hardware capabilities of the SoC but are explicitly
+    // disabled in software (CONFIG_BT_ENABLED=n in sdkconfig.defaults).
     std::string features = "";
     if (chip_info.features & CHIP_FEATURE_WIFI_BGN) features += "WiFi ";
-    if (chip_info.features & CHIP_FEATURE_BT) features += "BT ";
-    if (chip_info.features & CHIP_FEATURE_BLE) features += "BLE ";
+    // Bluetooth intentionally omitted — disabled via sdkconfig.defaults
     if (!features.empty()) info.push_back("Features: " + features);
 
     std::vector<std::string> logo_lines;

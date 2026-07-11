@@ -1,8 +1,18 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include "enums/NodeMode.h"
 
+struct TaskConfig {
+    std::string type;
+    std::string room;
+    int heating_pin{-1};
+    int cooling_pin{-1};
+    int pin_num{-1};
+    int sda_pin{-1};
+    int scl_pin{-1};
+};
 
 struct AppConfig {
     std::string wifi_ssid;
@@ -15,7 +25,12 @@ struct AppConfig {
     std::string mqtt_pass;
     NodeMode node_mode;
     std::string node_uuid;
+    std::string room;
+    float optimal_temp;
+    float temp_threshold;
+    std::vector<TaskConfig> tasks;
 };
+
 
 class ConfigManager {
 public:
