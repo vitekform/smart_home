@@ -14,11 +14,17 @@
 
 static uint8_t oled_buffer[128 * 64 / 8];
 
+// ── Pixel row positions for the 7 label slots (Montserrat 8, 8 px tall) ──────
+static const int ROW_Y[7] = {0, 8, 17, 26, 35, 44, 53};
+
 DisplayManager& DisplayManager::get_instance() {
     static DisplayManager instance;
     return instance;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  init
+// ─────────────────────────────────────────────────────────────────────────────
 void DisplayManager::init(gpio_num_t sda_pin, gpio_num_t scl_pin) {
     if (initialized) {
         return;
@@ -60,7 +66,8 @@ void DisplayManager::init(gpio_num_t sda_pin, gpio_num_t scl_pin) {
         std::cerr << "[LVGL] Scanning all I2C addresses 0x00-0x7F..." << std::endl;
         for (uint8_t i = 1; i < 127; i++) {
             if (i2c_master_probe(i2c_bus, i, 50) == ESP_OK) {
-                std::cout << "[LVGL SCAN] Found I2C device at address: 0x" << std::hex << (int)i << std::dec << std::endl;
+                std::cout << "[LVGL SCAN] Found I2C device at address: 0x"
+                          << std::hex << (int)i << std::dec << std::endl;
                 oled_addr = i;
                 found = true;
             }
@@ -147,71 +154,394 @@ void DisplayManager::init(gpio_num_t sda_pin, gpio_num_t scl_pin) {
     ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, 5 * 1000)); // 5ms
 
-    // Create UI layout
+    // 7. Create UI layout — 7 generic label rows
     std::lock_guard<std::mutex> lock(lvgl_mutex);
-    
-    // Clear screen conversion buffer initially
     std::memset(oled_buffer, 0, sizeof(oled_buffer));
 
-    // Create text labels on the display's active screen
     lv_obj_t *screen = lv_display_get_screen_active(display);
-    label_header = lv_label_create(screen);
-    label_divider = lv_label_create(screen);
-    label_wifi = lv_label_create(screen);
-    label_mqtt = lv_label_create(screen);
-    label_slaves = lv_label_create(screen);
-    label_meteos = lv_label_create(screen);
-    label_sensor = lv_label_create(screen);
+    for (int i = 0; i < 7; i++) {
+        label_row[i] = lv_label_create(screen);
+        lv_obj_align(label_row[i], LV_ALIGN_TOP_LEFT, 0, ROW_Y[i]);
+        lv_label_set_text(label_row[i], "");
+    }
 
-    // Position them on the screen (Montserrat 8 font, height 8px)
-    lv_obj_align(label_header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_align(label_divider, LV_ALIGN_TOP_MID, 0, 8);
-    lv_obj_align(label_wifi, LV_ALIGN_TOP_LEFT, 0, 17);
-    lv_obj_align(label_mqtt, LV_ALIGN_TOP_LEFT, 0, 26);
-    lv_obj_align(label_slaves, LV_ALIGN_TOP_LEFT, 0, 35);
-    lv_obj_align(label_meteos, LV_ALIGN_TOP_LEFT, 0, 44);
-    lv_obj_align(label_sensor, LV_ALIGN_TOP_LEFT, 0, 53);
+    // Render BOOTING splash — shown while the rest of the system initialises
+    current_screen = ScreenID::BOOTING;
+    list_scroll_offset = 0;
 
-    // Initial label text
-    lv_label_set_text(label_header, "*** MASTER NODE ***");
-    lv_label_set_text(label_divider, "--------------------");
-    lv_label_set_text(label_wifi, "WiFi:  Init...");
-    lv_label_set_text(label_mqtt, "MQTT:  Init...");
-    lv_label_set_text(label_slaves, "Slaves: 0");
-    lv_label_set_text(label_meteos, "Meteos: 0");
-    lv_label_set_text(label_sensor, "Temp:  N/A | Hum: N/A");
+    lv_obj_set_align(label_row[0], LV_ALIGN_TOP_MID);
+    lv_obj_set_align(label_row[1], LV_ALIGN_TOP_MID);
+    lv_obj_set_pos(label_row[0], 0, ROW_Y[0]);
+    lv_obj_set_pos(label_row[1], 0, ROW_Y[1]);
+
+    lv_label_set_text(label_row[0], "*** MASTER NODE ***");
+    lv_label_set_text(label_row[1], "--------------------");
+    lv_label_set_text(label_row[2], "");
+    lv_label_set_text(label_row[3], "  Booting up...");
+    lv_label_set_text(label_row[4], "");
+    lv_label_set_text(label_row[5], "");
+    lv_label_set_text(label_row[6], "");
+    lv_obj_invalidate(lv_display_get_screen_active(display));
 
     initialized = true;
     std::cout << "[LVGL] Display initialized successfully with LVGL9!" << std::endl;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  start
+// ─────────────────────────────────────────────────────────────────────────────
 void DisplayManager::start() {
     if (!initialized) {
         std::cerr << "[LVGL] Cannot start: Not initialized." << std::endl;
         return;
     }
-    // Create task to handle periodic UI content updates
-    xTaskCreate(display_update_task, "display_update_task", 4096, nullptr, 5, nullptr);
-    
-    // Create task to run LVGL tick/timer handler
-    xTaskCreate(lvgl_port_task, "lvgl_port_task", 4096, nullptr, 5, nullptr);
-
-    // Create task to force full screen re-render every 5 seconds
+    xTaskCreate(display_update_task,    "display_update_task",    4096, nullptr, 5, nullptr);
+    xTaskCreate(lvgl_port_task,         "lvgl_port_task",         4096, nullptr, 5, nullptr);
     xTaskCreate(screen_invalidate_task, "screen_invalidate_task", 2048, nullptr, 5, nullptr);
 }
 
-void DisplayManager::lock() {
-    lvgl_mutex.lock();
+// ───────────────────────────────────────────────────────────────────────────────
+//  show_boot_screen
+//  May be called any time after init() to jump back to the BOOTING splash.
+// ───────────────────────────────────────────────────────────────────────────────
+void DisplayManager::show_boot_screen() {
+    if (!initialized) return;
+    spinner_frame = 0;
+    current_screen = ScreenID::BOOTING;
+    list_scroll_offset = 0;
+    render_screen(ScreenID::BOOTING);
 }
 
-void DisplayManager::unlock() {
-    lvgl_mutex.unlock();
+// ───────────────────────────────────────────────────────────────────────────────
+//  show_shutdown_screen
+//  Shows the shutdown splash and blocks ~1.5 s so the message is visible
+//  before the caller invokes esp_restart().
+// ───────────────────────────────────────────────────────────────────────────────
+void DisplayManager::show_shutdown_screen() {
+    if (!initialized) return;
+    spinner_frame = 0;
+    current_screen = ScreenID::SHUTDOWN;
+    list_scroll_offset = 0;
+    render_screen(ScreenID::SHUTDOWN);
+    // Hold for ~2 s so the spinner can animate visibly before the restart fires
+    vTaskDelay(pdMS_TO_TICKS(2000));
 }
 
-void DisplayManager::example_increase_lvgl_tick(void *arg) {
-    lv_tick_inc(5); // 5ms tick
+// ───────────────────────────────────────────────────────────────────────────────
+//  transition_to_status
+//  Called once the system is fully booted to leave the BOOTING splash and start
+//  the normal STATUS screen cycle.
+// ───────────────────────────────────────────────────────────────────────────────
+void DisplayManager::transition_to_status() {
+    if (!initialized) return;
+    current_screen = ScreenID::STATUS;
+    list_scroll_offset = 0;
+    render_screen(ScreenID::STATUS);
 }
 
+void DisplayManager::lock()   { lvgl_mutex.lock(); }
+void DisplayManager::unlock() { lvgl_mutex.unlock(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  navigate  — called from display_update_task with the button event
+// ─────────────────────────────────────────────────────────────────────────────
+void DisplayManager::navigate(ButtonEvent event) {
+    int idx = static_cast<int>(current_screen);
+
+    switch (event) {
+        case ButtonEvent::RIGHT:
+            idx = (idx + 1) % SCREEN_COUNT;
+            list_scroll_offset = 0;
+            current_screen = static_cast<ScreenID>(idx);
+            render_screen(current_screen);
+            break;
+
+        case ButtonEvent::LEFT:
+            idx = (idx - 1 + SCREEN_COUNT) % SCREEN_COUNT;
+            list_scroll_offset = 0;
+            current_screen = static_cast<ScreenID>(idx);
+            render_screen(current_screen);
+            break;
+
+        case ButtonEvent::BACK:
+            list_scroll_offset = 0;
+            current_screen = ScreenID::STATUS;
+            render_screen(current_screen);
+            break;
+
+        case ButtonEvent::DOWN:
+            if (current_screen == ScreenID::SLAVES || current_screen == ScreenID::METEOS) {
+                list_scroll_offset++;
+                render_screen(current_screen);
+            }
+            break;
+
+        case ButtonEvent::UP:
+            if (current_screen == ScreenID::SLAVES || current_screen == ScreenID::METEOS) {
+                if (list_scroll_offset > 0) {
+                    list_scroll_offset--;
+                    render_screen(current_screen);
+                }
+            }
+            break;
+
+        case ButtonEvent::SELECT:
+            // Reserved for future use (enter detail view, etc.)
+            break;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  render_screen  — updates all 7 label rows for the given screen
+// ─────────────────────────────────────────────────────────────────────────────
+void DisplayManager::render_screen(ScreenID screen) {
+    auto& state = SystemStateManager::get_instance();
+
+    // Helper lambda: set all 7 rows at once
+    auto set_rows = [&](const char* r0, const char* r1,
+                        const char* r2, const char* r3,
+                        const char* r4, const char* r5,
+                        const char* r6)
+    {
+        lock();
+        lv_label_set_text(label_row[0], r0);
+        lv_label_set_text(label_row[1], r1);
+        lv_label_set_text(label_row[2], r2);
+        lv_label_set_text(label_row[3], r3);
+        lv_label_set_text(label_row[4], r4);
+        lv_label_set_text(label_row[5], r5);
+        lv_label_set_text(label_row[6], r6);
+        lv_obj_invalidate(lv_display_get_screen_active(display));
+        unlock();
+    };
+
+    switch (screen) {
+
+        // ── Screen 0: STATUS ────────────────────────────────────────────────
+        case ScreenID::STATUS: {
+            std::string wifi_str = state.is_wifi_connected() ? "WiFi:  CONNECTED"
+                                                             : "WiFi:  DISCONNECTED";
+            std::string mqtt_str = state.is_mqtt_connected() ? "MQTT:  CONNECTED"
+                                                             : "MQTT:  DISCONNECTED";
+            int slaves = static_cast<int>(state.get_slave_uuids().size());
+            int meteos = static_cast<int>(state.get_meteo_uuids().size());
+
+            std::string ss_slaves = "Slaves: " + std::to_string(slaves);
+            std::string ss_meteos = "Meteos: " + std::to_string(meteos);
+
+            float temp = 0.0f, hum = 0.0f;
+            state.get_sensor_data(temp, hum);
+
+            std::ostringstream ss_sensor;
+            if (meteos > 0 && (temp != 0.0f || hum != 0.0f)) {
+                ss_sensor << "T:" << std::fixed << std::setprecision(1) << temp
+                          << "C H:" << std::fixed << std::setprecision(1) << hum << "%";
+            } else {
+                ss_sensor << "Temp: N/A | Hum: N/A";
+            }
+
+            set_rows("** MASTER NODE **",
+                     "--------------------",
+                     wifi_str.c_str(),
+                     mqtt_str.c_str(),
+                     ss_slaves.c_str(),
+                     ss_meteos.c_str(),
+                     ss_sensor.str().c_str());
+            break;
+        }
+
+        // ── Screen 1: SLAVES ────────────────────────────────────────────────
+        case ScreenID::SLAVES: {
+            auto uuids = state.get_slave_uuids();
+            int total = static_cast<int>(uuids.size());
+
+            // Clamp scroll offset
+            int max_offset = (total > 5) ? (total - 5) : 0;
+            if (list_scroll_offset > max_offset) list_scroll_offset = max_offset;
+
+            std::string header = "SLAVES (" + std::to_string(total) + ")";
+            std::string rows[5];
+            for (int i = 0; i < 5; i++) {
+                int idx = list_scroll_offset + i;
+                if (idx < total) {
+                    // Truncate UUID to 20 chars to fit display
+                    rows[i] = uuids[idx].substr(0, 20);
+                } else {
+                    rows[i] = "";
+                }
+            }
+
+            set_rows(header.c_str(),
+                     "--------------------",
+                     rows[0].c_str(),
+                     rows[1].c_str(),
+                     rows[2].c_str(),
+                     rows[3].c_str(),
+                     rows[4].c_str());
+            break;
+        }
+
+        // ── Screen 2: METEOS ────────────────────────────────────────────────
+        case ScreenID::METEOS: {
+            auto uuids = state.get_meteo_uuids();
+            int total = static_cast<int>(uuids.size());
+
+            int max_offset = (total > 5) ? (total - 5) : 0;
+            if (list_scroll_offset > max_offset) list_scroll_offset = max_offset;
+
+            std::string header = "METEOS (" + std::to_string(total) + ")";
+            std::string rows[5];
+            for (int i = 0; i < 5; i++) {
+                int idx = list_scroll_offset + i;
+                if (idx < total) {
+                    rows[i] = uuids[idx].substr(0, 20);
+                } else {
+                    rows[i] = "";
+                }
+            }
+
+            set_rows(header.c_str(),
+                     "--------------------",
+                     rows[0].c_str(),
+                     rows[1].c_str(),
+                     rows[2].c_str(),
+                     rows[3].c_str(),
+                     rows[4].c_str());
+            break;
+        }
+
+        // ── Screen 3: SENSOR ────────────────────────────────────────────────
+        case ScreenID::SENSOR: {
+            float temp = 0.0f, hum = 0.0f;
+            state.get_sensor_data(temp, hum);
+
+            std::ostringstream ss_temp, ss_hum;
+            ss_temp << "Temp: " << std::fixed << std::setprecision(2) << temp << " C";
+            ss_hum  << "Hum:  " << std::fixed << std::setprecision(2) << hum  << " %";
+
+            int meteos = static_cast<int>(state.get_meteo_uuids().size());
+            std::string src = "Sources: " + std::to_string(meteos) + " meteo(s)";
+
+            set_rows("--- SENSOR DATA ---",
+                     "--------------------",
+                     ss_temp.str().c_str(),
+                     ss_hum.str().c_str(),
+                     src.c_str(),
+                     "",
+                     "");
+            break;
+        }
+
+        // ── Screen 4: SYSTEM ────────────────────────────────────────────────
+        case ScreenID::SYSTEM: {
+            std::string uuid  = state.get_node_uuid();
+            std::string mode  = "Mode: " + state.get_node_mode_str();
+            std::string room  = "Room: " + state.get_room();
+
+            // UUID may be long — split into two lines of 20 chars each
+            std::string uuid1 = uuid.substr(0, 20);
+            std::string uuid2 = (uuid.size() > 20) ? uuid.substr(20, 20) : "";
+
+            set_rows("--- SYSTEM INFO ---",
+                     "--------------------",
+                     uuid1.c_str(),
+                     uuid2.c_str(),
+                     mode.c_str(),
+                     room.c_str(),
+                     "");
+            break;
+        }
+
+        // ── Screen BOOTING: boot splash ───────────────────────────────────────
+        case ScreenID::BOOTING: {
+            set_rows("*** MASTER NODE ***",
+                     "--------------------",
+                     "",
+                     "  Booting up...",
+                     "",   // row 4 — spinner task writes here
+                     "",
+                     "");
+            break;
+        }
+
+        // ── Screen SHUTDOWN: shutdown splash ──────────────────────────────────
+        case ScreenID::SHUTDOWN: {
+            set_rows("*** MASTER NODE ***",
+                     "--------------------",
+                     "",
+                     " Shutting down...",
+                     "",   // row 4 — spinner task writes here
+                     "",
+                     "");
+            break;
+        }
+
+        default:
+            break;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  display_update_task
+//  - Drives the spinner animation on BOOTING / SHUTDOWN screens
+//  - Drains the button event queue and delegates to navigate()
+//  - Refreshes live STATUS data every second
+// ─────────────────────────────────────────────────────────────────────────────
+void DisplayManager::display_update_task(void* pvParameters) {
+    auto& dm = DisplayManager::get_instance();
+    QueueHandle_t btn_queue = ButtonManager::get_instance().get_event_queue();
+
+    // ASCII spinner frames — cycles every 200 ms tick → ~2.5 rpm visual
+    static constexpr const char* SPINNER_FRAMES[] = {
+        "        |",
+        "        /",
+        "        -",
+        "        \\"
+    };
+    static constexpr int SPINNER_COUNT = 4;
+
+    while (true) {
+        if (!dm.initialized) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        // Animate spinner on boot / shutdown splash screens
+        if (dm.current_screen == ScreenID::BOOTING ||
+            dm.current_screen == ScreenID::SHUTDOWN)
+        {
+            dm.spinner_frame = (dm.spinner_frame + 1) % SPINNER_COUNT;
+            const char* frame = SPINNER_FRAMES[dm.spinner_frame];
+
+            dm.lock();
+            lv_label_set_text(dm.label_row[4], frame);
+            lv_obj_invalidate(lv_display_get_screen_active(dm.display));
+            dm.unlock();
+
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        // Process all pending button events (non-blocking drain)
+        ButtonEvent ev;
+        while (btn_queue != nullptr &&
+               xQueueReceive(btn_queue, &ev, 0) == pdTRUE)
+        {
+            dm.navigate(ev);
+        }
+
+        // Live refresh for STATUS screen (data changes every second)
+        if (dm.current_screen == ScreenID::STATUS) {
+            dm.render_screen(ScreenID::STATUS);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(200)); // 5 Hz polling — snappy UI response
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LVGL timer / flush tasks and callbacks (unchanged logic)
+// ─────────────────────────────────────────────────────────────────────────────
 void DisplayManager::lvgl_port_task(void* pvParameters) {
     auto& dm = DisplayManager::get_instance();
     while (true) {
@@ -238,6 +568,10 @@ void DisplayManager::screen_invalidate_task(void* pvParameters) {
             dm.unlock();
         }
     }
+}
+
+void DisplayManager::example_increase_lvgl_tick(void *arg) {
+    lv_tick_inc(5); // 5ms tick
 }
 
 void DisplayManager::example_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
@@ -267,64 +601,15 @@ void DisplayManager::example_lvgl_flush_cb(lv_display_t *disp, const lv_area_t *
     esp_err_t ret = esp_lcd_panel_draw_bitmap(panel_hdl, x1, y1, x2 + 1, y2 + 1, oled_buffer);
     if (ret != ESP_OK) {
         std::cerr << "[LVGL CALLBACK] esp_lcd_panel_draw_bitmap failed: " << esp_err_to_name(ret) << std::endl;
-        // Fallback: notify ready to prevent rendering engine freeze
         lv_display_flush_ready(disp);
     }
 }
 
-bool DisplayManager::example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t io_panel, esp_lcd_panel_io_event_data_t *edata, void *user_ctx) {
+bool DisplayManager::example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t io_panel,
+                                                      esp_lcd_panel_io_event_data_t *edata,
+                                                      void *user_ctx)
+{
     lv_display_t *disp = (lv_display_t *)user_ctx;
     lv_display_flush_ready(disp);
     return false;
-}
-
-void DisplayManager::display_update_task(void* pvParameters) {
-    auto& state = SystemStateManager::get_instance();
-    auto& dm = DisplayManager::get_instance();
-
-    while (true) {
-        if (!dm.initialized) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-
-        // Get states
-        std::string wifi_str = "WiFi:  ";
-        wifi_str += (state.is_wifi_connected() ? "CONNECTED" : "DISCONNECTED");
-
-        std::string mqtt_str = "MQTT:  ";
-        mqtt_str += (state.is_mqtt_connected() ? "CONNECTED" : "DISCONNECTED");
-
-        int slaves = state.get_slave_uuids().size();
-        int meteos = state.get_meteo_uuids().size();
-        
-        std::stringstream ss_slaves;
-        ss_slaves << "Slaves: " << slaves;
-
-        std::stringstream ss_meteos;
-        ss_meteos << "Meteos: " << meteos;
-
-        float temp = 0.0f;
-        float hum = 0.0f;
-        state.get_sensor_data(temp, hum);
-
-        std::stringstream ss_sensor;
-        if (meteos > 0 && (temp != 0.0f || hum != 0.0f)) {
-            ss_sensor << "Temp:  " << std::fixed << std::setprecision(1) << temp << "C | Hum: " 
-                      << std::fixed << std::setprecision(1) << hum << "%";
-        } else {
-            ss_sensor << "Temp:  N/A | Hum: N/A";
-        }
-
-        // Update UI labels (thread-safe)
-        dm.lock();
-        lv_label_set_text(dm.label_wifi, wifi_str.c_str());
-        lv_label_set_text(dm.label_mqtt, mqtt_str.c_str());
-        lv_label_set_text(dm.label_slaves, ss_slaves.str().c_str());
-        lv_label_set_text(dm.label_meteos, ss_meteos.str().c_str());
-        lv_label_set_text(dm.label_sensor, ss_sensor.str().c_str());
-        dm.unlock();
-
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
 }

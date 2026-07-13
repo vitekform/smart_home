@@ -19,6 +19,7 @@
 #include "modules/data_collection/tnh_sensor.h"
 #include "modules/data_collection/out_sensor.h"
 #include "modules/display_manager.h"
+#include "modules/button_manager.h"
 #include <vector>
 #include <string_view>
 #include <ranges>
@@ -206,6 +207,7 @@ void handle_command_topic(const std::string& topic, const std::string& data, App
     std::cout << "[MQTT] Received command on topic [" << topic << "]: " << data << std::endl;
     if (data == "restart") {
         std::cout << "Restarting system as requested..." << std::endl;
+        DisplayManager::get_instance().show_shutdown_screen();
         esp_restart();
     } else if (data == "reset" || data == "reset_config") {
         std::cout << "Resetting config.json to defaults..." << std::endl;
@@ -213,6 +215,7 @@ void handle_command_topic(const std::string& topic, const std::string& data, App
         ConfigManager::get_default(defaultConfig);
         if (ConfigManager::save(defaultConfig)) {
             std::cout << "Config reset successful! Restarting system..." << std::endl;
+            DisplayManager::get_instance().show_shutdown_screen();
             esp_restart();
         } else {
             std::cerr << "Failed to reset config!" << std::endl;
@@ -265,6 +268,7 @@ void handle_command_topic(const std::string& topic, const std::string& data, App
                 std::cout << "[MQTT] Node state updated to " << state << " and saved successfully." << std::endl;
                 // call restart
                 std::cout << "Restarting system because of configuration change of mode" << std::endl;
+                DisplayManager::get_instance().show_shutdown_screen();
                 esp_restart();
             }
         }
@@ -278,6 +282,7 @@ void handle_command_topic(const std::string& topic, const std::string& data, App
                 config.room = room;
                 ConfigManager::save(config);
                 std::cout << "[MQTT] Room updated to " << room << " and saved successfully. Restarting..." << std::endl;
+                DisplayManager::get_instance().show_shutdown_screen();
                 esp_restart();
             }
         }
@@ -335,6 +340,7 @@ void handle_command_topic(const std::string& topic, const std::string& data, App
                 if (success) {
                     ConfigManager::save(config);
                     std::cout << "[MQTT] Tasks updated and saved. Restarting..." << std::endl;
+                    DisplayManager::get_instance().show_shutdown_screen();
                     esp_restart();
                 }
             }
@@ -549,6 +555,7 @@ extern "C" void app_main(void)
         DisplayManager::get_instance().init(GPIO_NUM_8, GPIO_NUM_9);
 #endif
         DisplayManager::get_instance().start();
+        ButtonManager::get_instance().init();
     }
 
     MqttManager mqtt;
@@ -559,6 +566,11 @@ extern "C" void app_main(void)
         handle_internal_topic(topic, data);
     });
     mqtt.init(config.mqtt_broker_url, config.mqtt_client_id, config.mqtt_pass, x1root);
+
+    // Boot complete — transition display from BOOTING splash to the normal STATUS screen
+    if (config.node_mode == NodeMode::MASTER) {
+        DisplayManager::get_instance().transition_to_status();
+    }
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));

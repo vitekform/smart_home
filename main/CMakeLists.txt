@@ -1,3 +1,3 @@
-idf_component_register(SRCS "main.cpp" "modules/fastfetch.cpp" "modules/mqtt_manager.cpp" "modules/vfs.cpp" "modules/config_manager.cpp" "modules/data_collection/tnh_sensor.cpp" "modules/data_collection/out_sensor.cpp" "modules/state_manager.cpp" "modules/display_manager.cpp"
+idf_component_register(SRCS "main.cpp" "modules/fastfetch.cpp" "modules/mqtt_manager.cpp" "modules/vfs.cpp" "modules/config_manager.cpp" "modules/data_collection/tnh_sensor.cpp" "modules/data_collection/out_sensor.cpp" "modules/state_manager.cpp" "modules/display_manager.cpp" "modules/button_manager.cpp"
         INCLUDE_DIRS "."
         PRIV_REQUIRES esp_wifi lwip esp_event spi_flash nvs_flash esp_timer littlefs driver esp_driver_i2c esp_lcd)
